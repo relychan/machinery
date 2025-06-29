@@ -4,11 +4,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/RichardKnop/machinery/v2"
-	redisbackend "github.com/RichardKnop/machinery/v2/backends/redis"
-	redisbroker "github.com/RichardKnop/machinery/v2/brokers/redis"
-	"github.com/RichardKnop/machinery/v2/config"
-	eagerlock "github.com/RichardKnop/machinery/v2/locks/eager"
+	"github.com/relychan/machinery/v2"
+	redisbackend "github.com/relychan/machinery/v2/backends/redis"
+	redisbroker "github.com/relychan/machinery/v2/brokers/redis"
+	"github.com/relychan/machinery/v2/config"
+	eagerlock "github.com/relychan/machinery/v2/locks/eager"
 )
 
 func TestRedisRedis_GoRedis(t *testing.T) {

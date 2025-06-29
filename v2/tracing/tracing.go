@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/RichardKnop/machinery/v2/tasks"
+	"github.com/relychan/machinery/v2/tasks"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -20,7 +20,7 @@ var (
 	WorkflowChainTag = attribute.String("machinery.workflow", "chain")
 )
 
-var tracer = otel.Tracer("github.com/RichardKnop/machinery/v2")
+var tracer = otel.Tracer("github.com/relychan/machinery/v2")
 
 // StartSpan starts a new span with the given operation name.
 func StartSpan(ctx context.Context, operationName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {

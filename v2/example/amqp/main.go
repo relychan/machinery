@@ -11,17 +11,17 @@ import (
 	"github.com/urfave/cli"
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/RichardKnop/machinery/v2"
-	"github.com/RichardKnop/machinery/v2/config"
-	"github.com/RichardKnop/machinery/v2/log"
-	"github.com/RichardKnop/machinery/v2/tasks"
-	"github.com/RichardKnop/machinery/v2/tracing"
+	"github.com/relychan/machinery/v2"
+	"github.com/relychan/machinery/v2/config"
+	"github.com/relychan/machinery/v2/log"
+	"github.com/relychan/machinery/v2/tasks"
+	"github.com/relychan/machinery/v2/tracing"
 
-	amqpbackend "github.com/RichardKnop/machinery/v2/backends/amqp"
-	amqpbroker "github.com/RichardKnop/machinery/v2/brokers/amqp"
-	exampletasks "github.com/RichardKnop/machinery/v2/example/tasks"
-	"github.com/RichardKnop/machinery/v2/example/tracers"
-	eagerlock "github.com/RichardKnop/machinery/v2/locks/eager"
+	amqpbackend "github.com/relychan/machinery/v2/backends/amqp"
+	amqpbroker "github.com/relychan/machinery/v2/brokers/amqp"
+	exampletasks "github.com/relychan/machinery/v2/example/tasks"
+	"github.com/relychan/machinery/v2/example/tracers"
+	eagerlock "github.com/relychan/machinery/v2/locks/eager"
 )
 
 var (
