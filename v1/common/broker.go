@@ -4,11 +4,11 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/RichardKnop/machinery/v1/brokers/iface"
-	"github.com/RichardKnop/machinery/v1/config"
-	"github.com/RichardKnop/machinery/v1/log"
-	"github.com/RichardKnop/machinery/v1/retry"
-	"github.com/RichardKnop/machinery/v1/tasks"
+	"github.com/relychan/machinery/v1/brokers/iface"
+	"github.com/relychan/machinery/v1/config"
+	"github.com/relychan/machinery/v1/log"
+	"github.com/relychan/machinery/v1/retry"
+	"github.com/relychan/machinery/v1/tasks"
 )
 
 type registeredTaskNames struct {
