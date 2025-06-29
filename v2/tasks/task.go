@@ -7,11 +7,9 @@ import (
 	"reflect"
 	"runtime/debug"
 
-	opentracing "github.com/opentracing/opentracing-go"
-	opentracing_ext "github.com/opentracing/opentracing-go/ext"
-	opentracing_log "github.com/opentracing/opentracing-go/log"
-
 	"github.com/RichardKnop/machinery/v2/log"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrTaskPanicked ...
@@ -96,14 +94,13 @@ func New(taskFunc interface{}, args []Arg) (*Task, error) {
 // Call attempts to call the task with the supplied arguments.
 //
 // `err` is set in the return value in two cases:
-// 1. The reflected function invocation panics (e.g. due to a mismatched
-//    argument list).
-// 2. The task func itself returns a non-nil error.
+//  1. The reflected function invocation panics (e.g. due to a mismatched
+//     argument list).
+//  2. The task func itself returns a non-nil error.
 func (t *Task) Call() (taskResults []*TaskResult, err error) {
 	// retrieve the span from the task's context and finish it as soon as this function returns
-	if span := opentracing.SpanFromContext(t.Context); span != nil {
-		defer span.Finish()
-	}
+	span := trace.SpanFromContext(t.Context)
+	defer span.End()
 
 	defer func() {
 		// Recover from panic and set err.
@@ -118,13 +115,8 @@ func (t *Task) Call() (taskResults []*TaskResult, err error) {
 			}
 
 			// mark the span as failed and dump the error and stack trace to the span
-			if span := opentracing.SpanFromContext(t.Context); span != nil {
-				opentracing_ext.Error.Set(span, true)
-				span.LogFields(
-					opentracing_log.Error(err),
-					opentracing_log.Object("stack", string(debug.Stack())),
-				)
-			}
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 
 			// Print stack trace
 			log.ERROR.Printf("%s", debug.Stack())
