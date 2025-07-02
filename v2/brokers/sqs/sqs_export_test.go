@@ -1,6 +1,7 @@
 package sqs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -155,7 +156,7 @@ func (b *Broker) ConsumeOneForTest(delivery *awssqs.ReceiveMessageOutput, taskPr
 }
 
 func (b *Broker) DeleteOneForTest(delivery *awssqs.ReceiveMessageOutput) error {
-	return b.deleteOne(delivery)
+	return b.deleteOne(context.TODO(), delivery)
 }
 
 func (b *Broker) DefaultQueueURLForTest() *string {
@@ -203,7 +204,7 @@ func (b *Broker) GetRetryStopChanForTest() chan int {
 }
 
 func (b *Broker) GetQueueURLForTest(taskProcessor iface.TaskProcessor) *string {
-	return b.getQueueURL(taskProcessor)
+	return b.getQueueURL("", taskProcessor)
 }
 
 func (b *Broker) GetCustomQueueURL(customQueue string) *string {

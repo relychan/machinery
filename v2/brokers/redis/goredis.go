@@ -11,8 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redsync/redsync/v4"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/RichardKnop/machinery/v2/brokers/errs"
 	"github.com/RichardKnop/machinery/v2/brokers/iface"
@@ -22,17 +25,15 @@ import (
 	"github.com/RichardKnop/machinery/v2/tasks"
 )
 
+var tracer = otel.Tracer("brokers/redis")
+
 // BrokerGR represents a Redis broker
 type BrokerGR struct {
 	common.Broker
-	rclient      redis.UniversalClient
-	consumingWG  sync.WaitGroup // wait group to make sure whole consumption completes
-	processingWG sync.WaitGroup // use wait group to make sure task processing completes
-	delayedWG    sync.WaitGroup
-	// If set, path to a socket file overrides hostname
-	socketPath           string
-	redsync              *redsync.Redsync
-	redisOnce            sync.Once
+	rclient              redis.UniversalClient
+	consumingWG          sync.WaitGroup // wait group to make sure whole consumption completes
+	processingWG         sync.WaitGroup // use wait group to make sure task processing completes
+	delayedWG            sync.WaitGroup
 	redisDelayedTasksKey string
 }
 
@@ -135,7 +136,7 @@ func (b *BrokerGR) StartConsuming(consumerTag string, concurrency int, taskProce
 				close(deliveries)
 				return
 			case <-pool:
-				task, _ := b.nextTask(getQueueGR(b.GetConfig(), taskProcessor))
+				task, _ := b.nextTask(context.TODO(), getQueueGR(b.GetConfig(), taskProcessor))
 				//TODO: should this error be ignored?
 				if len(task) > 0 {
 					deliveries <- task
@@ -200,11 +201,19 @@ func (b *BrokerGR) StopConsuming() {
 
 // Publish places a new message on the default queue
 func (b *BrokerGR) Publish(ctx context.Context, signature *tasks.Signature) error {
+	ctx, span := tracer.Start(ctx, "Publish", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("task.id", signature.UUID))
+
 	// Adjust routing key (this decides which queue the message will be published to)
 	b.Broker.AdjustRoutingKey(signature)
 
 	msg, err := json.Marshal(signature)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
 		return fmt.Errorf("JSON marshal error: %s", err)
 	}
 
@@ -215,18 +224,27 @@ func (b *BrokerGR) Publish(ctx context.Context, signature *tasks.Signature) erro
 
 		if signature.ETA.After(now) {
 			score := signature.ETA.UnixNano()
-			err = b.rclient.ZAdd(context.Background(), b.redisDelayedTasksKey, redis.Z{Score: float64(score), Member: msg}).Err()
+			err = b.rclient.ZAdd(ctx, b.redisDelayedTasksKey, redis.Z{Score: float64(score), Member: msg}).Err()
+			if err != nil {
+				span.SetStatus(codes.Error, err.Error())
+				span.RecordError(err)
+			}
+
 			return err
 		}
 	}
 
-	err = b.rclient.RPush(context.Background(), signature.RoutingKey, msg).Err()
+	err = b.rclient.RPush(ctx, signature.RoutingKey, msg).Err()
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+	}
+
 	return err
 }
 
 // GetPendingTasks returns a slice of task signatures waiting in the queue
 func (b *BrokerGR) GetPendingTasks(queue string) ([]*tasks.Signature, error) {
-
 	if queue == "" {
 		queue = b.GetConfig().DefaultQueue
 	}
@@ -266,6 +284,36 @@ func (b *BrokerGR) GetDelayedTasks() ([]*tasks.Signature, error) {
 		taskSignatures[i] = signature
 	}
 	return taskSignatures, nil
+}
+
+// PullTask pops next available task from the default queue
+func (b *BrokerGR) PullTask(ctx context.Context, queue string) (*tasks.Signature, error) {
+	ctx, span := tracer.Start(ctx, "PullTask", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("queue.name", queue))
+
+	result, err := b.nextTask(ctx, queue)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	signature := new(tasks.Signature)
+	decoder := json.NewDecoder(bytes.NewReader(result))
+	decoder.UseNumber()
+	if err := decoder.Decode(signature); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	span.SetAttributes(attribute.String("task.id", signature.UUID))
+
+	return signature, nil
 }
 
 // consume takes delivered messages from the channel and manages a worker pool
@@ -341,8 +389,7 @@ func (b *BrokerGR) consumeOne(delivery []byte, taskProcessor iface.TaskProcessor
 }
 
 // nextTask pops next available task from the default queue
-func (b *BrokerGR) nextTask(queue string) (result []byte, err error) {
-
+func (b *BrokerGR) nextTask(ctx context.Context, queue string) (result []byte, err error) {
 	pollPeriodMilliseconds := 1000 // default poll period for normal tasks
 	if b.GetConfig().Redis != nil {
 		configuredPollPeriod := b.GetConfig().Redis.NormalTasksPollPeriod
@@ -352,7 +399,7 @@ func (b *BrokerGR) nextTask(queue string) (result []byte, err error) {
 	}
 	pollPeriod := time.Duration(pollPeriodMilliseconds) * time.Millisecond
 
-	items, err := b.rclient.BLPop(context.Background(), pollPeriod, queue).Result()
+	items, err := b.rclient.BLPop(ctx, pollPeriod, queue).Result()
 	if err != nil {
 		return []byte{}, err
 	}

@@ -66,3 +66,8 @@ func (eagerBroker *Broker) Publish(ctx context.Context, task *tasks.Signature) e
 func (eagerBroker *Broker) AssignWorker(w iface.TaskProcessor) {
 	eagerBroker.worker = w
 }
+
+// PullTask pops next available task from the input queue
+func (b *Broker) PullTask(_ctx context.Context, _queue string) (*tasks.Signature, error) {
+	return nil, nil
+}

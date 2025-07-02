@@ -282,6 +282,23 @@ func (b *Broker) GetDelayedTasks() ([]*tasks.Signature, error) {
 	return taskSignatures, nil
 }
 
+// PullTask pops next available task from the default queue
+func (b *Broker) PullTask(_ context.Context, queue string) (*tasks.Signature, error) {
+	result, err := b.nextTask(queue)
+	if err != nil {
+		return nil, err
+	}
+
+	signature := new(tasks.Signature)
+	decoder := json.NewDecoder(bytes.NewReader(result))
+	decoder.UseNumber()
+	if err := decoder.Decode(signature); err != nil {
+		return nil, err
+	}
+
+	return signature, nil
+}
+
 // consume takes delivered messages from the channel and manages a worker pool
 // to process tasks concurrently
 func (b *Broker) consume(deliveries <-chan []byte, concurrency int, taskProcessor iface.TaskProcessor, stopConsumer chan struct{}) error {

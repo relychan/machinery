@@ -18,6 +18,10 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs/sqsiface"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
 )
@@ -25,6 +29,8 @@ import (
 const (
 	maxAWSSQSDelay = time.Minute * 15 // Max supported SQS delay is 15 min: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SendMessage.html
 )
+
+var tracer = otel.Tracer("brokers/sqs")
 
 // Broker represents a AWS SQS broker
 // There are examples on: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/sqs-example-create-queue.html
@@ -60,7 +66,7 @@ func New(cnf *config.Config) iface.Broker {
 // StartConsuming enters a loop and waits for incoming messages
 func (b *Broker) StartConsuming(consumerTag string, concurrency int, taskProcessor iface.TaskProcessor) (bool, error) {
 	b.Broker.StartConsuming(consumerTag, concurrency, taskProcessor)
-	qURL := b.getQueueURL(taskProcessor)
+	qURL := b.getQueueURL("", taskProcessor)
 	//save it so that it can be used later when attempting to delete task
 	b.queueUrl = qURL
 
@@ -125,8 +131,16 @@ func (b *Broker) StopConsuming() {
 
 // Publish places a new message on the default queue
 func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error {
+	ctx, span := tracer.Start(ctx, "Publish", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("task.id", signature.UUID))
+
 	msg, err := json.Marshal(signature)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
 		return fmt.Errorf("JSON marshal error: %s", err)
 	}
 
@@ -147,8 +161,13 @@ func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error 
 		// Do not Use Machinery's signature Group UUID as SQS Message Group ID, instead use BrokerMessageGroupId
 		MsgGroupID := signature.BrokerMessageGroupId
 		if MsgGroupID == "" {
-			return fmt.Errorf("please specify BrokerMessageGroupId attribute for task Signature when submitting a task to FIFO queue")
+			err := fmt.Errorf("please specify BrokerMessageGroupId attribute for task Signature when submitting a task to FIFO queue")
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
+
+			return err
 		}
+
 		MsgInput.MessageGroupId = aws.String(MsgGroupID)
 	}
 
@@ -166,20 +185,65 @@ func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error 
 	}
 
 	result, err := b.service.SendMessageWithContext(ctx, MsgInput)
-
 	if err != nil {
 		log.ERROR.Printf("Error when sending a message: %v", err)
-		return err
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 
+		return err
 	}
+
 	log.INFO.Printf("Sending a message successfully, the messageId is %v", *result.MessageId)
+
 	return nil
 
 }
 
+// PullTask pull the next available task from the default queue
+func (b *Broker) PullTask(ctx context.Context, queue string) (*tasks.Signature, error) {
+	ctx, span := tracer.Start(ctx, "PullTask", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("queue.name", queue))
+
+	qURL := b.getQueueURL(queue, nil)
+	//save it so that it can be used later when attempting to delete task
+	b.queueUrl = qURL
+
+	output, err := b.receiveMessage(qURL)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	if len(output.Messages) == 0 {
+		return nil, nil
+	}
+
+	// remove the delivery from the queue
+	if delErr := b.deleteOne(ctx, output); delErr != nil {
+		log.ERROR.Printf("error when deleting the delivery. delivery is %v, Error=%s", output, delErr)
+	}
+
+	sig := new(tasks.Signature)
+	decoder := json.NewDecoder(strings.NewReader(*output.Messages[0].Body))
+	decoder.UseNumber()
+	if err := decoder.Decode(sig); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	span.SetAttributes(attribute.String("task.id", sig.UUID))
+
+	return sig, nil
+}
+
 // consume is a method which keeps consuming deliveries from a channel, until there is an error or a stop signal
 func (b *Broker) consume(deliveries <-chan *awssqs.ReceiveMessageOutput, concurrency int, taskProcessor iface.TaskProcessor, pool chan struct{}) error {
-
 	errorsChan := make(chan error)
 
 	for {
@@ -206,7 +270,7 @@ func (b *Broker) consumeOne(delivery *awssqs.ReceiveMessageOutput, taskProcessor
 	if err := decoder.Decode(sig); err != nil {
 		log.ERROR.Printf("unmarshal error. the delivery is %v", delivery)
 		// if the unmarshal fails, remove the delivery from the queue
-		if delErr := b.deleteOne(delivery); delErr != nil {
+		if delErr := b.deleteOne(context.TODO(), delivery); delErr != nil {
 			log.ERROR.Printf("error when deleting the delivery. delivery is %v, Error=%s", delivery, delErr)
 		}
 		return err
@@ -219,7 +283,7 @@ func (b *Broker) consumeOne(delivery *awssqs.ReceiveMessageOutput, taskProcessor
 	// and leave the message in the queue
 	if !b.IsTaskRegistered(sig.Name) {
 		if sig.IgnoreWhenTaskNotRegistered {
-			b.deleteOne(delivery)
+			b.deleteOne(context.TODO(), delivery)
 		}
 		return fmt.Errorf("task %s is not registered", sig.Name)
 	}
@@ -233,16 +297,16 @@ func (b *Broker) consumeOne(delivery *awssqs.ReceiveMessageOutput, taskProcessor
 		return err
 	}
 	// Delete message after successfully consuming and processing the message
-	if err = b.deleteOne(delivery); err != nil {
+	if err = b.deleteOne(context.TODO(), delivery); err != nil {
 		log.ERROR.Printf("error when deleting the delivery. delivery is %v, Error=%s", delivery, err)
 	}
 	return err
 }
 
 // deleteOne is a method delete a delivery from AWS SQS
-func (b *Broker) deleteOne(delivery *awssqs.ReceiveMessageOutput) error {
+func (b *Broker) deleteOne(ctx context.Context, delivery *awssqs.ReceiveMessageOutput) error {
 	qURL := b.defaultQueueURL()
-	_, err := b.service.DeleteMessage(&awssqs.DeleteMessageInput{
+	_, err := b.service.DeleteMessageWithContext(ctx, &awssqs.DeleteMessageInput{
 		QueueUrl:      qURL,
 		ReceiptHandle: delivery.Messages[0].ReceiptHandle,
 	})
@@ -250,6 +314,7 @@ func (b *Broker) deleteOne(delivery *awssqs.ReceiveMessageOutput) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -260,7 +325,6 @@ func (b *Broker) defaultQueueURL() *string {
 	} else {
 		return aws.String(b.GetConfig().Broker + "/" + b.GetConfig().DefaultQueue)
 	}
-
 }
 
 // receiveMessage is a method receives a message from specified queue url
@@ -358,11 +422,21 @@ func (b *Broker) stopReceiving() {
 
 // getQueueURL is a method returns that returns queueURL first by checking if custom queue was set and usign it
 // otherwise using default queueName from config
-func (b *Broker) getQueueURL(taskProcessor iface.TaskProcessor) *string {
-	queueName := b.GetConfig().DefaultQueue
-	if taskProcessor.CustomQueue() != "" {
+func (b *Broker) getQueueURL(queueName string, taskProcessor iface.TaskProcessor) *string {
+	_queueName := b.getQueueName(queueName, taskProcessor)
+
+	return aws.String(b.GetConfig().Broker + "/" + _queueName)
+}
+
+func (b *Broker) getQueueName(queueName string, taskProcessor iface.TaskProcessor) string {
+	if queueName != "" {
+		return queueName
+	}
+
+	queueName = b.GetConfig().DefaultQueue
+	if taskProcessor != nil && taskProcessor.CustomQueue() != "" {
 		queueName = taskProcessor.CustomQueue()
 	}
 
-	return aws.String(b.GetConfig().Broker + "/" + queueName)
+	return queueName
 }

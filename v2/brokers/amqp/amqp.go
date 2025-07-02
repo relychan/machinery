@@ -16,7 +16,13 @@ import (
 	"github.com/RichardKnop/machinery/v2/log"
 	"github.com/RichardKnop/machinery/v2/tasks"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var tracer = otel.Tracer("brokers/amqp")
 
 type AMQPConnection struct {
 	queueName    string
@@ -183,11 +189,18 @@ func (b *Broker) CloseConnections() error {
 
 // Publish places a new message on the default queue
 func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error {
+	_, span := tracer.Start(ctx, "Publish", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("task.id", signature.UUID))
 	// Adjust routing key (this decides which queue the message will be published to)
 	b.AdjustRoutingKey(signature)
 
 	msg, err := json.Marshal(signature)
 	if err != nil {
+		span.SetStatus(codes.Error, "JSON marshal error")
+		span.RecordError(err)
+
 		return fmt.Errorf("JSON marshal error: %s", err)
 	}
 
@@ -218,6 +231,9 @@ func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error 
 		amqp.Table(b.GetConfig().AMQP.QueueBindingArgs), // queue binding args
 	)
 	if err != nil {
+		span.SetStatus(codes.Error, "Failed to get a connection for queue "+queue)
+		span.RecordError(err)
+
 		return fmt.Errorf("Failed to get a connection for queue %s: %w", queue, err)
 	}
 
@@ -237,6 +253,9 @@ func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error 
 			DeliveryMode: amqp.Persistent,
 		},
 	); err != nil {
+		span.SetStatus(codes.Error, "Failed to publish task")
+		span.RecordError(err)
+
 		return fmt.Errorf("Failed to publish task: %w", err)
 	}
 
@@ -246,7 +265,65 @@ func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error 
 		return nil
 	}
 
-	return fmt.Errorf("Failed delivery of delivery tag: %v", confirmed.DeliveryTag)
+	err = fmt.Errorf("Failed delivery of delivery tag: %v", confirmed.DeliveryTag)
+	span.SetStatus(codes.Error, err.Error())
+
+	return err
+}
+
+// PullTask pops next available task from the input queue
+func (b *Broker) PullTask(ctx context.Context, queue string) (*tasks.Signature, error) {
+	if queue == "" {
+		queue = b.GetConfig().DefaultQueue
+	}
+
+	_, span := tracer.Start(ctx, "PullTask", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("queue.name", queue))
+
+	bindingKey := b.GetConfig().AMQP.BindingKey // queue binding key
+
+	connection, err := b.GetOrOpenConnection(
+		queue,
+		bindingKey, // queue binding key
+		nil,        // exchange declare args
+		amqp.Table(b.GetConfig().AMQP.QueueDeclareArgs), // queue declare args
+		amqp.Table(b.GetConfig().AMQP.QueueBindingArgs), // queue binding args
+	)
+	if err != nil {
+		span.SetStatus(codes.Error, "Failed to get a connection for queue "+queue)
+		span.RecordError(err)
+
+		return nil, fmt.Errorf("Failed to get a connection for queue %s: %w", queue, err)
+	}
+
+	delivery, ok, err := connection.channel.Get(queue, true)
+	if err != nil {
+		span.SetStatus(codes.Error, "Failed to get a delivery for queue "+queue)
+		span.RecordError(err)
+
+		return nil, fmt.Errorf("Failed to get a delivery for queue %s: %w", queue, err)
+	}
+
+	if !ok || len(delivery.Body) == 0 {
+		return nil, nil
+	}
+
+	// Unmarshal message body into signature struct
+	signature := new(tasks.Signature)
+	decoder := json.NewDecoder(bytes.NewReader(delivery.Body))
+	decoder.UseNumber()
+	if err := decoder.Decode(signature); err != nil {
+		span.SetStatus(codes.Error, "Failed to decode the signature for queue "+queue)
+		span.RecordError(err)
+
+		return nil, fmt.Errorf("Failed to decode the signature for queue %s: %w", queue, err)
+	}
+
+	span.SetAttributes(attribute.String("task.id", signature.UUID))
+
+	return signature, nil
 }
 
 // consume takes delivered messages from the channel and manages a worker pool

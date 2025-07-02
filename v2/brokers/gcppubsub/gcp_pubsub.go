@@ -13,7 +13,13 @@ import (
 	"github.com/RichardKnop/machinery/v2/config"
 	"github.com/RichardKnop/machinery/v2/log"
 	"github.com/RichardKnop/machinery/v2/tasks"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var tracer = otel.Tracer("brokers/gcppubsub")
 
 // Broker represents an Google Cloud Pub/Sub broker
 type Broker struct {
@@ -128,11 +134,17 @@ func (b *Broker) StopConsuming() {
 // Publish places a new message on the default queue or the queue pointed to
 // by the routing key
 func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error {
+	ctx, span := tracer.Start(ctx, "Publish", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	// Adjust routing key (this decides which queue the message will be published to)
 	b.AdjustRoutingKey(signature)
 
 	msg, err := json.Marshal(signature)
 	if err != nil {
+		span.SetStatus(codes.Error, "JSON marshal error")
+		span.RecordError(err)
+
 		return fmt.Errorf("JSON marshal error: %s", err)
 	}
 
@@ -156,11 +168,68 @@ func (b *Broker) Publish(ctx context.Context, signature *tasks.Signature) error 
 	id, err := result.Get(ctx)
 	if err != nil {
 		log.ERROR.Printf("Error when sending a message: %v", err)
+		span.SetStatus(codes.Error, "Error when sending a message")
+		span.RecordError(err)
+
 		return err
 	}
 
 	log.INFO.Printf("Sending a message successfully, server-generated message ID %v", id)
+
 	return nil
+}
+
+// PullTask pops next available task from the default queue
+func (b *Broker) PullTask(ctx context.Context, queue string) (*tasks.Signature, error) {
+	ctx, span := tracer.Start(ctx, "PullTask", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	span.SetAttributes(attribute.String("queue.name", queue))
+
+	sub := b.service.Subscription(b.subscriptionName)
+
+	if b.MaxExtension != 0 {
+		sub.ReceiveSettings.MaxExtension = b.MaxExtension
+	}
+
+	sub.ReceiveSettings.Synchronous = true
+	sub.ReceiveSettings.MaxOutstandingMessages = 1
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	var signature *tasks.Signature
+
+	err := sub.Receive(ctx, func(_ctx context.Context, msg *pubsub.Message) {
+		// Call Ack() after successfully consuming and processing the message
+		msg.Ack()
+
+		if len(msg.Data) == 0 {
+			cancel()
+
+			return
+		}
+
+		signature = new(tasks.Signature)
+		decoder := json.NewDecoder(bytes.NewReader(msg.Data))
+		decoder.UseNumber()
+		if err := decoder.Decode(signature); err != nil {
+			cancel()
+
+			return
+		}
+	})
+
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	span.SetAttributes(attribute.String("task.id", signature.UUID))
+
+	return signature, nil
 }
 
 // consumeOne processes a single message using TaskProcessor

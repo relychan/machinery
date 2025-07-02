@@ -18,6 +18,7 @@ type Broker interface {
 	GetPendingTasks(queue string) ([]*tasks.Signature, error)
 	GetDelayedTasks() ([]*tasks.Signature, error)
 	AdjustRoutingKey(s *tasks.Signature)
+	PullTask(ctx context.Context, queue string) (*tasks.Signature, error)
 }
 
 // TaskProcessor - can process a delivered task
