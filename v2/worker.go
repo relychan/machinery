@@ -11,12 +11,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/RichardKnop/machinery/v2/backends/amqp"
-	"github.com/RichardKnop/machinery/v2/brokers/errs"
-	"github.com/RichardKnop/machinery/v2/log"
-	"github.com/RichardKnop/machinery/v2/retry"
-	"github.com/RichardKnop/machinery/v2/tasks"
-	"github.com/RichardKnop/machinery/v2/tracing"
+	"github.com/relychan/machinery/v2/backends/amqp"
+	"github.com/relychan/machinery/v2/brokers/errs"
+	"github.com/relychan/machinery/v2/log"
+	"github.com/relychan/machinery/v2/retry"
+	"github.com/relychan/machinery/v2/tasks"
+	"github.com/relychan/machinery/v2/tracing"
 )
 
 // Worker represents a single worker process

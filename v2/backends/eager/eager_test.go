@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/RichardKnop/machinery/v2/backends/eager"
-	"github.com/RichardKnop/machinery/v2/backends/iface"
-	"github.com/RichardKnop/machinery/v2/tasks"
+	"github.com/relychan/machinery/v2/backends/eager"
+	"github.com/relychan/machinery/v2/backends/iface"
+	"github.com/relychan/machinery/v2/tasks"
 	"github.com/stretchr/testify/suite"
 )
 

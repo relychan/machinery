@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/RichardKnop/machinery/v1"
-	"github.com/RichardKnop/machinery/v1/config"
+	"github.com/relychan/machinery/v1"
+	"github.com/relychan/machinery/v1/config"
 )
 
 func TestSQSMongodb(t *testing.T) {
