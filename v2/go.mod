@@ -1,4 +1,4 @@
-module github.com/RichardKnop/machinery/v2
+module github.com/relychan/machinery/v2
 
 go 1.24
 
@@ -70,5 +70,3 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )
-
-replace git.apache.org/thrift.git => github.com/apache/thrift v0.0.0-20180902110319-2566ecd5d999

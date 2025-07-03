@@ -17,12 +17,12 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/RichardKnop/machinery/v2/brokers/errs"
-	"github.com/RichardKnop/machinery/v2/brokers/iface"
-	"github.com/RichardKnop/machinery/v2/common"
-	"github.com/RichardKnop/machinery/v2/config"
-	"github.com/RichardKnop/machinery/v2/log"
-	"github.com/RichardKnop/machinery/v2/tasks"
+	"github.com/relychan/machinery/v2/brokers/errs"
+	"github.com/relychan/machinery/v2/brokers/iface"
+	"github.com/relychan/machinery/v2/common"
+	"github.com/relychan/machinery/v2/config"
+	"github.com/relychan/machinery/v2/log"
+	"github.com/relychan/machinery/v2/tasks"
 )
 
 var tracer = otel.Tracer("brokers/redis")

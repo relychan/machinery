@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"runtime/debug"
 
-	"github.com/RichardKnop/machinery/v2/log"
+	"github.com/relychan/machinery/v2/log"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
